@@ -21,8 +21,6 @@ DB_REGION = os.environ.get("DB_REGION")
 app = Flask(__name__)
 
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
-# app.config['SECRET_KEY'] = os.environ.get(
-#     'SECRET_KEY', 'change_this_super_secret_random_string')
 
 # use provided cluster pod iam role to get db token
 client = boto3.client('rds')
