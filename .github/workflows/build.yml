@@ -6,7 +6,7 @@ on:
     paths:
       - '*/Dockerfile'
       - '*/**'
-      - '.github/workflows/build-push-multi.yaml'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 permissions:
