@@ -90,4 +90,4 @@ jobs:
             ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.vars.outputs.sha_short }}
 
       - name: Image digest
-        run: echo "Pushed digest: ${{ steps.build-push.outputs.digest }}"
+        run: "echo \"Pushed digest: ${{ steps.build-push.outputs.digest }}\""
