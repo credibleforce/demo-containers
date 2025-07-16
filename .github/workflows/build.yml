@@ -1,4 +1,4 @@
-name: Build & Push All Containers
+name: Build & Push Changed Containers
 
 on:
   push:
@@ -6,8 +6,14 @@ on:
     paths:
       - '*/Dockerfile'
       - '*/**'
-      - '.github/workflows/build.yml'
+      - '.github/workflows/build-push-multi.yaml'
   workflow_dispatch:
+    inputs:
+      force_build_all:
+        description: 'Force build all containers (ignore changes)'
+        required: false
+        default: 'false'
+        type: boolean
 
 permissions:
   contents: read
@@ -23,6 +29,8 @@ jobs:
       images_json: ${{ steps.discover.outputs.images_json }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for git diff
 
       - id: discover
         shell: bash
@@ -31,21 +39,74 @@ jobs:
           shopt -s nullglob
 
           entries=()
+          force_all="${{ github.event.inputs.force_build_all }}"
+
+          # Get the previous commit to compare against
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # For push events, compare with previous commit
+            if [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+              prev_commit="${{ github.event.before }}"
+            else
+              # First commit or force push - build all
+              prev_commit=""
+            fi
+          else
+            # For workflow_dispatch, compare with HEAD~1
+            prev_commit="HEAD~1"
+          fi
 
           # Look for top-level dirs that contain a Dockerfile
           for df in */Dockerfile; do
             dir="${df%%/*}"
+            should_build=false
 
             # slug: lowercase, replace illegal chars w '-', trim leading/trailing '-'
             slug="$(echo "$dir" \
               | tr '[:upper:]' '[:lower:]' \
               | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+|-+$//g')"
 
-            entries+=("{\"name\":\"$slug\",\"path\":\"$dir\"}")
+            if [[ "$force_all" == "true" ]]; then
+              echo "Force building all containers - including $dir"
+              should_build=true
+            elif [[ -z "$prev_commit" ]]; then
+              echo "No previous commit found - building all containers including $dir"
+              should_build=true
+            else
+              # Check if any files in this directory have changed
+              changed_files=$(git diff --name-only "$prev_commit" HEAD -- "$dir/" || true)
+              
+              if [[ -n "$changed_files" ]]; then
+                echo "Changes detected in $dir:"
+                echo "$changed_files" | sed 's/^/  /'
+                should_build=true
+              else
+                echo "No changes in $dir - skipping"
+              fi
+            fi
+
+            if [[ "$should_build" == "true" ]]; then
+              entries+=("{\"name\":\"$slug\",\"path\":\"$dir\"}")
+            fi
           done
 
+          # Also check if the workflow file itself changed - if so, build all
+          if [[ -n "$prev_commit" ]] && [[ "$force_all" != "true" ]]; then
+            workflow_changed=$(git diff --name-only "$prev_commit" HEAD -- .github/workflows/build-push-multi.yaml || true)
+            if [[ -n "$workflow_changed" ]]; then
+              echo "Workflow file changed - rebuilding all containers"
+              entries=()
+              for df in */Dockerfile; do
+                dir="${df%%/*}"
+                slug="$(echo "$dir" \
+                  | tr '[:upper:]' '[:lower:]' \
+                  | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+|-+$//g')"
+                entries+=("{\"name\":\"$slug\",\"path\":\"$dir\"}")
+              done
+            fi
+          fi
+
           if (( ${#entries[@]} == 0 )); then
-            echo "No container directories found with Dockerfile."
+            echo "No containers need to be built."
             echo "images_json=[]" >>"$GITHUB_OUTPUT"
             exit 0
           fi
@@ -53,7 +114,7 @@ jobs:
           # Compact JSON (single line) so $GITHUB_OUTPUT parsing is happy.
           json=$(printf '%s\n' "${entries[@]}" | jq -c -s '.')
 
-          echo "Discovered images: $json"
+          echo "Containers to build: $json"
           echo "images_json=$json" >>"$GITHUB_OUTPUT"
 
   build:
@@ -75,7 +136,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: vars
-        run: "echo \"sha_short=${GITHUB_SHA::7}\" >> \"$GITHUB_OUTPUT\""
+        run: echo "sha_short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Build & Push
         id: build-push
