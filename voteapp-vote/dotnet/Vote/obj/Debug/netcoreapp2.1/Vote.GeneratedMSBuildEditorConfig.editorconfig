@@ -1,0 +1,8 @@
+is_global = true
+build_property.RootNamespace = Vote
+build_property.ProjectDir = /Users/jamie/Documents/dev/terraform-aws-org-management/terraform/lacework-deploy/terraform/modules/deployment/aws/modules/kubernetes-voteapp/vote/dotnet/Vote/
+build_property.EnableComHosting = 
+build_property.EnableGeneratedComInterfaceComImportInterop = 
+build_property.CsWinRTUseWindowsUIXamlProjections = false
+build_property.EffectiveAnalysisLevelStyle = 
+build_property.EnableCodeStyleSeverity = 
