@@ -20,7 +20,7 @@ jobs:
   discover:
     runs-on: ubuntu-latest
     outputs:
-      images: ${{ steps.discover.outputs.images_json }}
+      images_json: ${{ steps.discover.outputs.images_json }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,12 +58,12 @@ jobs:
 
   build:
     needs: discover
-    if: ${{ needs.discover.outputs.images != '[]' }}
+    if: ${{ needs.discover.outputs.images_json != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.discover.outputs.images) }}
+        include: ${{ fromJson(needs.discover.outputs.images_json) }}
     steps:
       - uses: actions/checkout@v4
 
