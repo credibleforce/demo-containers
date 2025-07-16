@@ -1,0 +1,130 @@
+name: Build & Push All Containers
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches: [ main ]
+    # Rebuild when container subdirs or workflow change
+    paths:
+      - '*/Dockerfile'
+      - '*/**'
+      - '.github/workflows/build-push-multi.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  discover-build:
+    runs-on: ubuntu-latest
+
+    outputs:
+      images: ${{ steps.discover.outputs.images_json }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Discover top-level directories that contain a Dockerfile
+      - id: discover
+        run: |
+          set -euo pipefail
+          imgs=()
+          for d in */ ; do
+            # strip trailing slash
+            name="${d%/}"
+            if [[ -f "${d}Dockerfile" ]]; then
+              # OCI repos are lower-case; normalize
+              slug="$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '-')"
+              imgs+=("{\"name\":\"$slug\",\"path\":\"$name\"}")
+            fi
+          done
+          if [[ ${#imgs[@]} -eq 0 ]]; then
+            echo "No container directories found with Dockerfile" >&2
+            # still emit valid JSON so matrix isn't empty/broken
+            echo 'images_json=[]' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          json=$(printf '%s\n' "${imgs[@]}" | jq -s '.')
+          echo "Discovered images:"
+          echo "$json"
+          echo "images_json=$json" >>"$GITHUB_OUTPUT"
+
+      # Set a short tag (7-char commit SHA); tags will also include :latest
+      - id: vars
+        run: |
+          echo "sha_short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # Use a matrix to build each discovered image
+      - name: Build matrix (needs GitHub eval)
+        if: ${{ steps.discover.outputs.images_json != '[]' }}
+        uses: actions/github-script@v7
+        id: matrix
+        with:
+          script: |
+            const imgs = JSON.parse(process.env.IMGS);
+            return { images: imgs };
+          result-encoding: string
+        env:
+          IMGS: ${{ steps.discover.outputs.images_json }}
+
+      - name: Set matrix
+        id: set-matrix
+        run: echo "matrix=${{ steps.matrix.outputs.result }}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: discover-build
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.discover-build.outputs.images) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Optional: login to AWS ECR too (uncomment + configure)
+      # - name: Configure AWS creds
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}   # or access keys
+      #     aws-region: us-east-1
+      #
+      # - name: Login to Amazon ECR
+      #   id: login-ecr
+      #   uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Derive tags
+        id: tag
+        run: |
+          SHA_SHORT=${GITHUB_SHA::7}
+          echo "sha_short=$SHA_SHORT" >> "$GITHUB_OUTPUT"
+
+      - name: Build & Push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.path }}
+          file: ${{ matrix.path }}/Dockerfile
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.name }}:latest
+            ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.tag.outputs.sha_short }}
+          # For dual-push to ECR, add another line:
+          #   ${{ steps.login-ecr.outputs.registry }}/${{ matrix.name }}:latest
+
+      # Optional: export digest for downstream deploy stages
+      - name: Image digest
+        run: echo "${{ env.REGISTRY }}/${{ matrix.name }}@${{ steps.build-push.outputs.digest }}"
